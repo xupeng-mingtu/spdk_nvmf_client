@@ -15,10 +15,11 @@ const (
 )
 
 type qpair struct {
-	qid     uint16
-	ctrlID  uint16
-	conn    *tcpConn
-	nextCID uint16
+	qid                uint16
+	ctrlID             uint16
+	conn               *tcpConn
+	nextCID            uint16
+	maxCapsuleDataSize uint32
 }
 
 func newAdminQpair() *qpair {
@@ -150,13 +151,35 @@ func (qp *qpair) close() {
 		qp.conn = nil
 	}
 }
+func (qp *qpair) queryMaxCapsuleDataSize() (uint32, error) {
+	const identifyDataSize = 4096
+	cid := qp.allocCID()
+	cmdBuf := buildIdentifyCmd(0x01, cid, identifyDataSize)
+
+	readBuf := make([]byte, identifyDataSize)
+	cpl, err := qp.sendIOCmd(cmdBuf, nil, readBuf)
+	if err != nil {
+		return 0, fmt.Errorf("identify controller: %w", err)
+	}
+	if !cpl.IsSuccess() {
+		return 0, fmt.Errorf("identify controller failed: SC=%d SCT=%d", cpl.SC(), cpl.SCT())
+	}
+
+	// ioccsz (I/O Command Capsule Supported Size) at offset 1792, 4 bytes, in 16-byte units
+	ioccsz := binary.LittleEndian.Uint32(readBuf[1792:1796])
+	tmpSize := ioccsz * 16
+	if tmpSize <= nvmeCmdSize {
+		return 0, nil
+	}
+	return tmpSize - nvmeCmdSize, nil
+}
 
 func (qp *qpair) sendIOCmd(cmdBuf []byte, writeBuf []byte, readBuf []byte) (*nvmeCpl, error) {
 	cid := binary.LittleEndian.Uint16(cmdBuf[2:4])
 	opcode := cmdBuf[0]
 	slog.Debug(qp.name()+" sendIOCmd", "opcode", opcode, "cid", cid, "has_write_buf", writeBuf != nil, "has_read_buf", readBuf != nil)
 
-	if writeBuf != nil && len(writeBuf) <= 4096 {
+	if writeBuf != nil && qp.maxCapsuleDataSize > 0 && uint32(len(writeBuf)) <= qp.maxCapsuleDataSize {
 		slog.Debug(qp.name()+" sendIOCmd: using in-capsule data", "data_len", len(writeBuf))
 		if err := qp.conn.sendCapsuleCmd(cmdBuf, writeBuf); err != nil {
 			return nil, fmt.Errorf("send IO capsule with data: %w", err)

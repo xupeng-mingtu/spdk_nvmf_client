@@ -181,7 +181,7 @@ func (qp *qpair) Write(lba uint64, nsid uint32, blockSize uint32, data []byte) e
 	cid := qp.allocCID()
 
 	var cmdBuf []byte
-	if len(data) <= 4096 {
+	if qp.maxCapsuleDataSize > 0 && uint32(len(data)) <= qp.maxCapsuleDataSize {
 		cmdBuf = buildWriteCmdWithOffsetSGL(lba, lbaCount, nsid, 0, uint32(len(data)), cid)
 	} else {
 		cmdBuf = buildWriteCmd(lba, lbaCount, nsid, uint32(len(data)), cid)
@@ -239,7 +239,7 @@ func (qp *qpair) Unmap(nsid uint32, ranges []UnmapRange) error {
 	cid := qp.allocCID()
 
 	var cmdBuf []byte
-	if totalBytes <= 4096 {
+	if qp.maxCapsuleDataSize > 0 && totalBytes <= qp.maxCapsuleDataSize {
 		cmdBuf = buildDatasetMgmtCmdWithInCapsule(nsid, uint32(len(ranges)), 0, totalBytes, cid)
 	} else {
 		cmdBuf = buildDatasetMgmtCmd(nsid, uint32(len(ranges)), totalBytes, cid)

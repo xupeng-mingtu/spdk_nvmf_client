@@ -30,6 +30,7 @@ const (
 	nvmeOpcFabric      = 0x7F
 	nvmeOpcWrite       = 0x01
 	nvmeOpcRead        = 0x02
+	nvmeOpcIdentify    = 0x06
 	nvmeOpcWriteZeroes = 0x08
 	nvmeOpcDatasetMgmt = 0x09 // Dataset Management (unmap)
 )
@@ -65,6 +66,8 @@ const (
 const (
 	dsmAttrDeallocate = 0x04
 )
+
+const nvmeCmdSize = 64
 
 // commonHeader: PDU 公共头部（8 字节）
 // byte[0]=pdu_type, [1]=flags, [2]=hlen, [3]=pdo, [4:8]=plen
@@ -335,6 +338,25 @@ func buildCCValue() uint64 {
 	cc |= 6 << 16
 	cc |= 4 << 20
 	return uint64(cc)
+}
+
+// buildIdentifyCmd 构建 NVMe Identify 命令（64 字节）
+// 字段布局:
+//
+//	byte[0]    : OPC   - Opcode = 0x06 (Identify)
+//	byte[1]    : PSDT  - bits[7:6]=0x01 (SGL mode)
+//	byte[2:4]  : CID   - Command ID
+//	byte[24:40]: SGL1  - Transport SGL, 指示 Controller 通过 C2HData 发送数据
+//	byte[40:44]: CDW10 - CNS (Controller or Namespace Structure)
+func buildIdentifyCmd(cns uint32, cid uint16, dataLen uint32) []byte {
+	buf := make([]byte, nvmeCmdSize)
+	buf[0] = nvmeOpcIdentify
+	buf[1] = psdtSGLMptrContig << 6
+	binary.LittleEndian.PutUint16(buf[2:4], cid)
+	sgl := newTransportSGL(dataLen)
+	sgl.encode(buf[24:40])
+	binary.LittleEndian.PutUint32(buf[40:44], cns)
+	return buf
 }
 
 // dsmRange: Dataset Management range 描述符（16 字节）

@@ -2,6 +2,7 @@ package tcp
 
 import (
 	"fmt"
+	"log/slog"
 	"time"
 )
 
@@ -51,7 +52,15 @@ func NewClient(cfg ClientConfig) (*Client, error) {
 		return nil, fmt.Errorf("enable controller: %w", err)
 	}
 
+	maxCapsuleDataSize, err := c.adminQP.queryMaxCapsuleDataSize()
+	if err != nil {
+		c.adminQP.close()
+		return nil, fmt.Errorf("query max capsule data size: %w", err)
+	}
+	slog.Info("queried max capsule data size", "bytes", maxCapsuleDataSize)
+
 	c.ioQP = newIOQpair(c.adminQP.ctrlID)
+	c.ioQP.maxCapsuleDataSize = maxCapsuleDataSize
 	if err := c.ioQP.connect(cfg.Addr, cfg.HostNQN, cfg.SubNQN); err != nil {
 		c.adminQP.close()
 		return nil, fmt.Errorf("connect io qpair: %w", err)
