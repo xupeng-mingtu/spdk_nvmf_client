@@ -35,6 +35,12 @@ const (
 	nvmeOpcDatasetMgmt = 0x09 // Dataset Management (unmap)
 )
 
+// NVMe Identify CNS (Controller or Namespace Structure)
+const (
+	nvmeIdentifyCNSNamespace  = 0x00
+	nvmeIdentifyCNSController = 0x01
+)
+
 // Fabric 命令子类型
 const (
 	nvmfFabricCmdConnect     = 0x01
@@ -346,13 +352,15 @@ func buildCCValue() uint64 {
 //	byte[0]    : OPC   - Opcode = 0x06 (Identify)
 //	byte[1]    : PSDT  - bits[7:6]=0x01 (SGL mode)
 //	byte[2:4]  : CID   - Command ID
+//	byte[4:8]  : NSID  - Namespace ID (CNS=0x00 时必须指定)
 //	byte[24:40]: SGL1  - Transport SGL, 指示 Controller 通过 C2HData 发送数据
 //	byte[40:44]: CDW10 - CNS (Controller or Namespace Structure)
-func buildIdentifyCmd(cns uint32, cid uint16, dataLen uint32) []byte {
+func buildIdentifyCmd(cns uint32, nsid uint32, cid uint16, dataLen uint32) []byte {
 	buf := make([]byte, nvmeCmdSize)
 	buf[0] = nvmeOpcIdentify
 	buf[1] = psdtSGLMptrContig << 6
 	binary.LittleEndian.PutUint16(buf[2:4], cid)
+	binary.LittleEndian.PutUint32(buf[4:8], nsid)
 	sgl := newTransportSGL(dataLen)
 	sgl.encode(buf[24:40])
 	binary.LittleEndian.PutUint32(buf[40:44], cns)

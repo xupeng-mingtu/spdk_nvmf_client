@@ -154,7 +154,7 @@ func (qp *qpair) close() {
 func (qp *qpair) queryMaxCapsuleDataSize() (uint32, error) {
 	const identifyDataSize = 4096
 	cid := qp.allocCID()
-	cmdBuf := buildIdentifyCmd(0x01, cid, identifyDataSize)
+	cmdBuf := buildIdentifyCmd(nvmeIdentifyCNSController, 0, cid, identifyDataSize)
 
 	readBuf := make([]byte, identifyDataSize)
 	cpl, err := qp.sendIOCmd(cmdBuf, nil, readBuf)
@@ -172,6 +172,44 @@ func (qp *qpair) queryMaxCapsuleDataSize() (uint32, error) {
 		return 0, nil
 	}
 	return tmpSize - nvmeCmdSize, nil
+}
+
+func (qp *qpair) queryNamespaceBlockSize(nsid uint32) (uint32, error) {
+	const identifyDataSize = 4096
+	cid := qp.allocCID()
+	cmdBuf := buildIdentifyCmd(nvmeIdentifyCNSNamespace, nsid, cid, identifyDataSize)
+
+	readBuf := make([]byte, identifyDataSize)
+	cpl, err := qp.sendIOCmd(cmdBuf, nil, readBuf)
+	if err != nil {
+		return 0, fmt.Errorf("identify namespace nsid=%d: %w", nsid, err)
+	}
+	if !cpl.IsSuccess() {
+		return 0, fmt.Errorf("identify namespace nsid=%d failed: SC=%d SCT=%d", nsid, cpl.SC(), cpl.SCT())
+	}
+
+	// FLBAS at offset 26
+	// bits[3:0]: format (LSB of Format Index)
+	// bit 4: extended
+	// bits[6:5]: msb_format (MSB of Format Index, to be ignored if nlbaf <= 16)
+	// bit 7: reserved
+	flbas := readBuf[26]
+	format := flbas & 0x0F
+	msbFormat := (flbas >> 5) & 0x03
+	lbaFormatIndex := (msbFormat << 4) + format
+
+	// LBA formats start at offset 128, each 4 bytes
+	// LBADS is at bits[23:16] of each format
+	formatOffset := 128 + int(lbaFormatIndex)*4
+	if formatOffset+4 > len(readBuf) {
+		return 0, fmt.Errorf("invalid LBA format index %d", lbaFormatIndex)
+	}
+	lbads := readBuf[formatOffset+2] // bits[23:16] -> byte 2 in little-endian 4-byte field
+	if lbads < 9 || lbads > 16 {
+		return 0, fmt.Errorf("invalid LBADS %d", lbads)
+	}
+	blockSize := uint32(1) << lbads
+	return blockSize, nil
 }
 
 func (qp *qpair) sendIOCmd(cmdBuf []byte, writeBuf []byte, readBuf []byte) (*nvmeCpl, error) {

@@ -43,7 +43,6 @@ func main() {
         HostNQN:        "nqn.2014-08.org.nvmexpress:uuid:myhost",
         SubNQN:         "nqn.2016-06.io.spdk:cnode1",
         NSID:           1,
-        BlockSize:      512,
         ConnectTimeout: 10 * time.Second,
     })
     if err != nil {
@@ -76,8 +75,9 @@ func main() {
 | `HostNQN` | `string` | Host NQN (NVMe Qualified Name) | 内置默认 UUID |
 | `SubNQN` | `string` | Subsystem NQN，目标端的子系统名称 | 必填 |
 | `NSID` | `uint32` | Namespace ID | `1` |
-| `BlockSize` | `uint32` | 块大小（字节） | `512` |
 | `ConnectTimeout` | `time.Duration` | 连接超时时间 | `3000s` |
+
+> **注意**：块大小（`BlockSize`）不再通过配置指定。客户端在连接建立后会自动通过 NVMe Identify Namespace 命令查询目标 Namespace 的实际 LBA 格式并计算块大小，可通过 `client.BlockSize()` 获取。
 
 ### `Client` 方法
 

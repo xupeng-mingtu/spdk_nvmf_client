@@ -5,8 +5,6 @@ import (
 	"fmt"
 )
 
-const defaultBlockSize = 512
-
 // buildReadCmd 构建 NVMe Read 命令（64 字节）
 // 字段布局（NVMe Command Format）:
 //

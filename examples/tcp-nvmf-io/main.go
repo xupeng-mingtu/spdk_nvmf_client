@@ -43,20 +43,23 @@ import (
 	"github.com/xupeng-mingtu/spdk_nvmf_client/tcp"
 )
 
-// 全局连接参数
 var (
-	flagAddr      = flag.String("addr", "", "NVMe-oF target 地址，格式 host:port（必填）")
-	flagSubNQN    = flag.String("subnqn", "", "目标 subsystem NQN（必填）")
-	flagHostNQN   = flag.String("hostnqn", tcp.DefaultHostNQN, "本端 host NQN")
-	flagNSID      = flag.Uint("nsid", 1, "命名空间 ID")
-	flagBlockSize = flag.Uint("bs", 512, "逻辑块大小（字节），通常为 512 或 4096")
-	flagDebug     = flag.Bool("debug", false, "启用 debug 日志级别")
+	flagAddr    = flag.String("addr", "", "NVMe-oF target 地址，格式 host:port（必填）")
+	flagSubNQN  = flag.String("subnqn", "", "目标 subsystem NQN（必填）")
+	flagHostNQN = flag.String("hostnqn", tcp.DefaultHostNQN, "本端 host NQN")
+	flagNSID    = flag.Uint("nsid", 1, "命名空间 ID")
+	flagDebug   = flag.Bool("debug", false, "启用 debug 日志级别")
 )
 
 // setupDebugLogger 设置 slog 为 debug 级别输出到标准错误
-func setupDebugLogger() {
+// setupLogger 设置 slog 输出到标准错误，根据 debug 模式调整日志级别
+func setupLogger(debug bool) {
+	level := slog.LevelInfo
+	if debug {
+		level = slog.LevelDebug
+	}
 	handler := slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
-		Level:     slog.LevelDebug,
+		Level:     level,
 		AddSource: true,
 		ReplaceAttr: func(groups []string, a slog.Attr) slog.Attr {
 			if a.Key == slog.SourceKey {
@@ -71,7 +74,6 @@ func setupDebugLogger() {
 	})
 	slog.SetDefault(slog.New(handler))
 }
-
 func usage() {
 	fmt.Fprintf(os.Stderr, `用法：nvmf-io [全局选项] <命令> [命令选项]
 
@@ -80,7 +82,6 @@ func usage() {
   -subnqn    string   目标 subsystem NQN（必填）
   -hostnqn   string   本端 host NQN（默认：%s）
   -nsid      uint     命名空间 ID（默认：1）
-  -bs        uint     逻辑块大小（字节，默认：512）
   -debug     bool     启用 debug 日志级别（默认：false）
 
 命令：
@@ -113,9 +114,7 @@ func main() {
 	flag.Usage = usage
 	flag.Parse()
 
-	if *flagDebug {
-		setupDebugLogger()
-	}
+	setupLogger(*flagDebug)
 
 	if *flagAddr == "" || *flagSubNQN == "" {
 		fmt.Fprintln(os.Stderr, "错误：-addr 和 -subnqn 为必填参数")
@@ -136,11 +135,10 @@ func main() {
 	// 建立 NVMe-oF TCP 连接
 	slog.Info("连接到 NVMe-oF target", "addr", *flagAddr, "subnqn", *flagSubNQN)
 	client, err := tcp.NewClient(tcp.ClientConfig{
-		Addr:      *flagAddr,
-		HostNQN:   *flagHostNQN,
-		SubNQN:    *flagSubNQN,
-		NSID:      uint32(*flagNSID),
-		BlockSize: uint32(*flagBlockSize),
+		Addr:    *flagAddr,
+		HostNQN: *flagHostNQN,
+		SubNQN:  *flagSubNQN,
+		NSID:    uint32(*flagNSID),
 	})
 	if err != nil {
 		slog.Error("连接失败", "error", err)

@@ -12,7 +12,6 @@ type ClientConfig struct {
 	HostNQN        string
 	SubNQN         string
 	NSID           uint32
-	BlockSize      uint32
 	ConnectTimeout time.Duration
 }
 
@@ -20,18 +19,15 @@ const DefaultHostNQN = "nqn.2014-08.org.nvmexpress:uuid:43c48637-f550-4f06-8d28-
 
 // Client 是 NVMe-oF TCP 客户端
 type Client struct {
-	cfg     ClientConfig
-	adminQP *qpair
-	ioQP    *qpair
+	cfg       ClientConfig
+	blockSize uint32
+	adminQP   *qpair
+	ioQP      *qpair
 }
 
-// NewClient 创建并初始化 NVMe-oF TCP 客户端
 func NewClient(cfg ClientConfig) (*Client, error) {
 	if cfg.NSID == 0 {
 		cfg.NSID = 1
-	}
-	if cfg.BlockSize == 0 {
-		cfg.BlockSize = defaultBlockSize
 	}
 	if cfg.ConnectTimeout == 0 {
 		cfg.ConnectTimeout = 3000 * time.Second
@@ -59,6 +55,14 @@ func NewClient(cfg ClientConfig) (*Client, error) {
 	}
 	slog.Info("queried max capsule data size", "bytes", maxCapsuleDataSize)
 
+	blockSize, err := c.adminQP.queryNamespaceBlockSize(c.cfg.NSID)
+	if err != nil {
+		c.adminQP.close()
+		return nil, fmt.Errorf("query namespace block size: %w", err)
+	}
+	c.blockSize = blockSize
+	slog.Info("queried namespace block size", "bytes", c.blockSize)
+
 	c.ioQP = newIOQpair(c.adminQP.ctrlID)
 	c.ioQP.maxCapsuleDataSize = maxCapsuleDataSize
 	if err := c.ioQP.connect(cfg.Addr, cfg.HostNQN, cfg.SubNQN); err != nil {
@@ -79,13 +83,12 @@ func (c *Client) Close() {
 		c.adminQP = nil
 	}
 }
-
 func (c *Client) Read(lba uint64, lbaCount uint32) ([]byte, error) {
-	return c.ioQP.Read(lba, lbaCount, c.cfg.NSID, c.cfg.BlockSize)
+	return c.ioQP.Read(lba, lbaCount, c.cfg.NSID, c.blockSize)
 }
 
 func (c *Client) Write(lba uint64, data []byte) error {
-	return c.ioQP.Write(lba, c.cfg.NSID, c.cfg.BlockSize, data)
+	return c.ioQP.Write(lba, c.cfg.NSID, c.blockSize, data)
 }
 
 func (c *Client) WriteZeroes(lba uint64, lbaCount uint32) error {
@@ -101,5 +104,5 @@ func (c *Client) NSID() uint32 {
 }
 
 func (c *Client) BlockSize() uint32 {
-	return c.cfg.BlockSize
+	return c.blockSize
 }
