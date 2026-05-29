@@ -12,11 +12,11 @@
   - `WriteZeroes` — 将指定 LBA 范围写零
   - `Unmap` — 执行 Dataset Management (Deallocate) 操作
 - 自动处理协议层细节（ICReq/ICResp、Fabric Connect、R2T、C2HData、H2CData、Capsule PDU）
-- 支持 in-capsule 小数据优化（≤4KB 直接封装，无需 R2T 往返）
+- 支持 in-capsule 小数据优化：连接建立后自动查询目标端的 I/O Command Capsule Supported Size（[`IOCCSZ`](tcp/qpair.go:169)），小数据直接封装在 Capsule Command 中发送，无需 R2T 往返
 
 ## 环境要求
 
-- **Go 1.21+**（因使用标准库 `log/slog`）
+- **Go 1.21+**（因使用标准库 [`log/slog`](tcp/client.go:5)）
 
 ## 安装
 
@@ -50,14 +50,14 @@ func main() {
     }
     defer client.Close()
 
-    // 写入数据
-    data := make([]byte, 4096)
+    // 写入数据（长度必须是 BlockSize 的整数倍）
+    data := make([]byte, client.BlockSize()*8)
     if err := client.Write(0, data); err != nil {
         log.Fatalf("write failed: %v", err)
     }
 
-    // 读取数据
-    readBuf, err := client.Read(0, 8) // 读取 8 个 block (4096 字节)
+    // 读取 8 个 block
+    readBuf, err := client.Read(0, 8)
     if err != nil {
         log.Fatalf("read failed: %v", err)
     }
@@ -72,12 +72,21 @@ func main() {
 | 字段 | 类型 | 说明 | 默认值 |
 |------|------|------|--------|
 | `Addr` | `string` | NVMe-oF Target 地址，如 `host:4420` | 必填 |
-| `HostNQN` | `string` | Host NQN (NVMe Qualified Name) | 内置默认 UUID |
+| `HostNQN` | `string` | Host NQN (NVMe Qualified Name) | [`tcp.DefaultHostNQN`](tcp/client.go:18) |
 | `SubNQN` | `string` | Subsystem NQN，目标端的子系统名称 | 必填 |
 | `NSID` | `uint32` | Namespace ID | `1` |
 | `ConnectTimeout` | `time.Duration` | 连接超时时间 | `3000s` |
 
-> **注意**：块大小（`BlockSize`）不再通过配置指定。客户端在连接建立后会自动通过 NVMe Identify Namespace 命令查询目标 Namespace 的实际 LBA 格式并计算块大小，可通过 `client.BlockSize()` 获取。
+> **注意**：块大小（`BlockSize`）不再通过配置指定。客户端在连接建立后会自动通过 NVMe Identify Namespace 命令查询目标 Namespace 的实际 LBA 格式并计算块大小，可通过 [`client.BlockSize()`](tcp/client.go:106) 获取。
+
+### `UnmapRange`
+
+```go
+type UnmapRange struct {
+    StartLBA uint64 // 起始 LBA
+    LBACount uint32 // 块数
+}
+```
 
 ### `Client` 方法
 
@@ -89,6 +98,10 @@ func main() {
 - `func (c *Client) Unmap(ranges []UnmapRange) error` — 解除映射（最多 256 个 range）
 - `func (c *Client) NSID() uint32` — 返回当前 Namespace ID
 - `func (c *Client) BlockSize() uint32` — 返回当前块大小
+
+### 公开常量
+
+- [`tcp.DefaultHostNQN`](tcp/client.go:18) — 默认 Host NQN，可在 `ClientConfig.HostNQN` 留空时使用
 
 ## 构建
 
@@ -123,7 +136,22 @@ make
 ./build/tcp-nvmf-io -addr 192.168.1.10:4420 -subnqn nqn.2022-08.io.spdk:vol1 rw    -lba 0 -count 8
 ```
 
-支持命令：`write`、`read`、`wzero`、`unmap`、`rw`。使用 `-debug` 可开启详细日志。
+支持命令：`write`、`read`、`wzero`、`unmap`、`rw`。
+
+全局选项：
+
+| 选项 | 类型 | 说明 | 默认值 |
+|------|------|------|--------|
+| `-addr` | `string` | NVMe-oF target 地址（必填） | — |
+| `-subnqn` | `string` | 目标 subsystem NQN（必填） | — |
+| `-hostnqn` | `string` | 本端 host NQN | `tcp.DefaultHostNQN` |
+| `-nsid` | `uint` | 命名空间 ID | `1` |
+| `-debug` | `bool` | 启用 debug 日志级别 | `false` |
+
+命令选项：
+
+- `write` / `rw`：`-lba`（默认 0）、`-count`（默认 8）、`-fill`（填充字节 0-255，默认 `0x5A`）
+- `read` / `wzero` / `unmap`：`-lba`（默认 0）、`-count`（默认 8）
 
 ## 目录结构
 
@@ -142,9 +170,9 @@ examples/
 
 ## 协议实现细节
 
-- **连接建立**：TCP Dial → ICReq/ICResp → Fabric Connect (Admin Queue) → Property Set (CC.EN=1) → Fabric Connect (I/O Queue)
+- **连接建立**：TCP Dial → ICReq/ICResp → Fabric Connect (Admin Queue) → Property Set (CC.EN=1) → Identify Controller（查询 Max Capsule Data Size）→ Identify Namespace（查询 Block Size）→ Fabric Connect (I/O Queue)
 - **数据传输方式**：
-  - 小数据（≤4KB）：使用 in-capsule Data Block with Offset SGL，直接随 Capsule Command 发送
+  - 小数据：当数据长度 ≤ 目标端报告的 Max Capsule Data Size 时，使用 in-capsule Data Block with Offset SGL，直接随 Capsule Command 发送
   - 大数据：使用 Transport SGL，通过 R2T → H2CData 流程传输写数据，或通过 C2HData 接收读数据
 - **命令标识**：每个 Queue Pair 内部维护递增的 16-bit CID
 
