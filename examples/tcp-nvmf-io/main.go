@@ -34,6 +34,7 @@ import (
 	"encoding/hex"
 	"flag"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -51,14 +52,45 @@ var (
 	flagDebug   = flag.Bool("debug", false, "启用 debug 日志级别")
 )
 
-// setupDebugLogger 设置 slog 为 debug 级别输出到标准错误
-// setupLogger 设置 slog 输出到标准错误，根据 debug 模式调整日志级别
+// colorWriter 拦截 slog 文本输出，为各字段注入 ANSI 颜色码
+type colorWriter struct {
+	w io.Writer
+}
+
+func (cw *colorWriter) Write(p []byte) (n int, err error) {
+	s := string(p)
+	reset := "\033[0m"
+
+	// level 颜色
+	levelColors := map[string]string{
+		"DEBUG": "\033[90m",
+		"INFO":  "\033[32m",
+		"WARN":  "\033[33m",
+		"ERROR": "\033[31m",
+	}
+	for lvl, color := range levelColors {
+		old := "level=" + lvl
+		if strings.Contains(s, old) {
+			s = strings.Replace(s, old, "level="+color+lvl+reset, 1)
+			break
+		}
+	}
+
+	// 其他 key 颜色
+	s = strings.ReplaceAll(s, "time=", "\033[0mtime="+reset)
+
+	_, err = cw.w.Write([]byte(s))
+	return len(p), err
+}
+
+// setupLogger 设置 slog 输出到标准错误，根据 debug 模式调整日志级别，并添加颜色
 func setupLogger(debug bool) {
 	level := slog.LevelInfo
 	if debug {
 		level = slog.LevelDebug
 	}
-	handler := slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
+
+	handler := slog.NewTextHandler(&colorWriter{w: os.Stderr}, &slog.HandlerOptions{
 		Level:     level,
 		AddSource: true,
 		ReplaceAttr: func(groups []string, a slog.Attr) slog.Attr {
